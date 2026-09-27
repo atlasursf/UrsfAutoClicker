@@ -22,12 +22,23 @@ add_executable(autoclicker-frontend
     resources.qrc
 )
 
+if(UNIX AND NOT APPLE)
+    target_sources(autoclicker-frontend PRIVATE x11_hotkey.cpp x11_hotkey.h)
+endif()
+
 target_link_libraries(autoclicker-frontend
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets
     Qt6::Network
 )
+
+if(UNIX AND NOT APPLE)
+    # Linux - X11 needed by frontend for the global hotkey (XGrabKey)
+    find_package(X11 REQUIRED)
+    target_link_libraries(autoclicker-frontend ${X11_LIBRARIES})
+    target_include_directories(autoclicker-frontend PRIVATE ${X11_INCLUDE_DIR})
+endif()
 
 # Backend executable (Wayland-compatible)
 add_executable(clicker-backend

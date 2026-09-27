@@ -1,13 +1,13 @@
 /**
  * URSF AutoClicker - Qt6 Frontend
- *
+ * 
  * Cross-platform UI with system tray icon.
- *
+ * 
  * Build:
  *   mkdir build && cd build
  *   cmake ..
  *   make
- *
+ * 
  * Dependencies:
  *   - Qt6 (Core, Gui, Widgets, Network)
  *   - CMake
@@ -17,9 +17,12 @@
 #include <memory>
 #include <thread>
 #include <chrono>
+#include <atomic>
 
 #ifdef _WIN32
-#include <windows.h>
+    #include <windows.h>
+#elif defined(__linux__)
+    #include "x11_hotkey.h"
 #endif
 
 #include <QApplication>
@@ -54,6 +57,7 @@
 #include <QListWidgetItem>
 #include <QDialog>
 #include <QScrollArea>
+#include <QMap>
 
 // =========================================================================
 // Backend Connection Manager (runs in background thread)
@@ -65,7 +69,7 @@ class BackendConnection : public QObject {
 public:
     BackendConnection(QObject* parent = nullptr)
         : QObject(parent), socket_(nullptr), backend_process_(nullptr),
-        is_clicking_(false), click_count_(0) {
+          is_clicking_(false), click_count_(0) {
         connect_timer_.setSingleShot(true);
     }
 
@@ -83,7 +87,7 @@ public:
                 emit error_occurred("Failed to start backend process");
                 return false;
             }
-
+            
             // Small delay for backend to open listening socket
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }
@@ -115,21 +119,21 @@ public:
     }
 
     void send_start_command(double cps, int duty, const QString& button,
-                            bool randomize, bool limit_enabled, int limit) {
+                           bool randomize, bool limit_enabled, int limit) {
         ensure_connected();
-
+        
         if (!socket_ || socket_->state() != QTcpSocket::ConnectedState) {
             emit error_occurred("Not connected to backend");
             return;
         }
 
         QString cmd = QString("START cps=%1 duty=%2 button=%3 randomize=%4 limit_enabled=%5 limit=%6\n")
-                          .arg(cps)
-                          .arg(duty)
-                          .arg(button)
-                          .arg(randomize ? 1 : 0)
-                          .arg(limit_enabled ? 1 : 0)
-                          .arg(limit);
+            .arg(cps)
+            .arg(duty)
+            .arg(button)
+            .arg(randomize ? 1 : 0)
+            .arg(limit_enabled ? 1 : 0)
+            .arg(limit);
 
         socket_->write(cmd.toUtf8());
         socket_->flush();
@@ -142,7 +146,7 @@ public:
 
     void send_stop_command() {
         ensure_connected();
-
+        
         if (!socket_ || socket_->state() != QTcpSocket::ConnectedState) {
             emit error_occurred("Not connected to backend");
             return;
@@ -172,11 +176,11 @@ private slots:
             socket_ = new QTcpSocket(this);
             connect(socket_, &QTcpSocket::connected, this, &BackendConnection::on_connected);
             connect(socket_, &QTcpSocket::disconnected, this, &BackendConnection::on_disconnected);
-
+            
             // Qt6.7+ compatible error signal handling
             connect(socket_, static_cast<void(QTcpSocket::*)(QAbstractSocket::SocketError)>(&QTcpSocket::errorOccurred),
                     this, &BackendConnection::on_error);
-
+            
             connect(socket_, &QTcpSocket::readyRead, this, &BackendConnection::on_read);
         }
 
@@ -227,8 +231,8 @@ class AutoClickerWindow : public QMainWindow {
 public:
     AutoClickerWindow(QWidget* parent = nullptr)
         : QMainWindow(parent), backend_connection_(nullptr),
-        selecting_key_(false), activation_key_(Qt::Key_F6),
-        prev_key_state_(false) {
+          selecting_key_(false), activation_key_(Qt::Key_F6),
+          prev_key_state_(false) {
         setWindowTitle("URSF AutoClicker");
         setWindowIcon(QIcon(":/icons/off.png"));
         setFixedSize(520, 550);
@@ -249,11 +253,24 @@ public:
 
         // Start backend
         backend_connection_->start_backend(9999);
-
-        // Start global hotkey listener (100ms poll)
+        
+#ifdef __linux__
+        // Real global hotkey via X11 (works even when window isn't focused)
+        hotkey_listener_ = new X11HotkeyListener(this);
+        connect(hotkey_listener_, &X11HotkeyListener::hotkeyPressed,
+                this, &AutoClickerWindow::toggle_clicker);
+        connect(hotkey_listener_, &X11HotkeyListener::errorOccurred,
+                this, [this](const QString& msg) {
+                    status_label_->setText("● Hotkey error: " + msg);
+                });
+        hotkey_listener_->set_key_name("F6");
+        hotkey_listener_->start();
+#else
+        // Start global hotkey listener (100ms poll) — Windows GetAsyncKeyState
         hotkey_timer_ = new QTimer(this);
         connect(hotkey_timer_, &QTimer::timeout, this, &AutoClickerWindow::check_hotkey);
         hotkey_timer_->start(100);
+#endif
     }
 
 private:
@@ -443,28 +460,54 @@ private:
         // TODO: Save to JSON config file
     }
 
+#ifdef __linux__
+    // Qt's QKeySequence text and X11's key names don't always match
+    // (e.g. Qt says "Esc", X11 wants "Escape"). Translate the common ones.
+    static QString x11_key_name(const QString& qt_name) {
+        static const QMap<QString, QString> table = {
+            {"Esc", "Escape"},
+            {"Return", "Return"},
+            {"Enter", "KP_Enter"},
+            {"Space", "space"},
+            {"Tab", "Tab"},
+            {"Backspace", "BackSpace"},
+            {"Del", "Delete"},
+            {"Ins", "Insert"},
+            {"Home", "Home"},
+            {"End", "End"},
+            {"PgUp", "Prior"},
+            {"PgDown", "Next"},
+            {"Up", "Up"},
+            {"Down", "Down"},
+            {"Left", "Left"},
+            {"Right", "Right"},
+        };
+        return table.value(qt_name, qt_name);
+    }
+#endif
+
 private slots:
     void check_hotkey() {
         if (selecting_key_) return;
-
-#ifdef _WIN32
-        // Windows: GetAsyncKeyState
-        bool is_pressed = (GetAsyncKeyState(activation_key_) & 0x8000) != 0;
-
-        if (is_pressed && !prev_key_state_) {
-            toggle_clicker();
-        }
-        prev_key_state_ = is_pressed;
-
-#else
-        // Linux/macOS: Global hotkey listening requires platform-specific code
-        // For now: rely on tray icon toggle (most reliable cross-platform)
-        // Full implementation would need:
-        // - X11: XGrabKey + XEvent loop
-        // - Wayland: D-Bus + systemd-logind
-        // - macOS: NSEvent global hotkey
-        return;
-#endif
+        
+        #ifdef _WIN32
+            // Windows: GetAsyncKeyState
+            bool is_pressed = (GetAsyncKeyState(activation_key_) & 0x8000) != 0;
+            
+            if (is_pressed && !prev_key_state_) {
+                toggle_clicker();
+            }
+            prev_key_state_ = is_pressed;
+            
+        #else
+            // Linux/macOS: Global hotkey listening requires platform-specific code
+            // For now: rely on tray icon toggle (most reliable cross-platform)
+            // Full implementation would need:
+            // - X11: XGrabKey + XEvent loop
+            // - Wayland: D-Bus + systemd-logind
+            // - macOS: NSEvent global hotkey
+            return;
+        #endif
     }
 
     void on_select_key() {
@@ -489,7 +532,7 @@ private slots:
                 randomize_check_->isChecked(),
                 limit_check_->isChecked(),
                 limit_spin_->value()
-                );
+            );
         }
     }
 
@@ -514,9 +557,20 @@ private slots:
 protected:
     void keyPressEvent(QKeyEvent* event) override {
         if (selecting_key_) {
-            activation_label_->setText(QKeySequence(event->key()).toString());
+            QString key_name = QKeySequence(event->key()).toString();
+            activation_label_->setText(key_name);
             selecting_key_ = false;
             select_button_->setEnabled(true);
+
+#ifdef __linux__
+            if (hotkey_listener_) {
+                hotkey_listener_->stop();
+                hotkey_listener_->set_key_name(x11_key_name(key_name));
+                hotkey_listener_->start();
+            }
+#else
+            activation_key_ = event->key();
+#endif
             return;
         }
         QMainWindow::keyPressEvent(event);
@@ -524,6 +578,11 @@ protected:
 
     void closeEvent(QCloseEvent* event) override {
         save_config();
+#ifdef __linux__
+        if (hotkey_listener_) {
+            hotkey_listener_->stop();
+        }
+#endif
         backend_connection_->stop_backend();
         QMainWindow::closeEvent(event);
     }
@@ -557,6 +616,9 @@ private:
     int activation_key_;
     bool prev_key_state_;
     QTimer* hotkey_timer_;
+#ifdef __linux__
+    X11HotkeyListener* hotkey_listener_ = nullptr;
+#endif
 };
 
 // =========================================================================
