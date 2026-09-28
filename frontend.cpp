@@ -257,7 +257,9 @@ public:
         prev_key_state_(false) {
         setWindowTitle("URSF AutoClicker");
         setWindowIcon(QIcon(":/icons/off.png"));
-        setFixedSize(520, 550);
+
+        resize(520, 550);
+
 
         // Create backend connection
         backend_connection_ = new BackendConnection(this);
