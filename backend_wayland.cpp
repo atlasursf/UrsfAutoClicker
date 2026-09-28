@@ -1,22 +1,22 @@
 /**
  * URSF AutoClicker - C++ Backend (Wayland Compatible)
- * 
+ *
  * Platform detection:
  *   - X11: XTest (fast native)
  *   - Wayland: uinput (slower but works)
  *   - Windows: WinAPI
  *   - macOS: CoreGraphics
- * 
+ *
  * Build:
  *   Linux:
  *     sudo apt-get install libx11-dev libxtst-dev libdbus-1-dev libudev-dev
  *     g++ -std=c++17 -pthread -o clicker-backend backend_wayland.cpp \
  *         -lX11 -lXtst -ldbus-1 $(pkg-config --cflags --libs libevdev) 2>/dev/null || \
  *     g++ -std=c++17 -pthread -o clicker-backend backend_wayland.cpp -ldbus-1
- *   
+ *
  *   macOS:
  *     g++ -std=c++17 -pthread -framework Cocoa -o clicker-backend backend_wayland.cpp
- *   
+ *
  *   Windows (MSVC):
  *     cl /std:c++17 /MT backend_wayland.cpp user32.lib
  */
@@ -35,21 +35,21 @@
 
 // Platform-specific socket includes
 #ifdef _WIN32
-    #include <winsock2.h>
-    #include <ws2tcpip.h>
-    #include <windows.h>
-    #pragma comment(lib, "ws2_32.lib")
-    typedef int socklen_t;
-    #define CLOSE_SOCKET closesocket
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#pragma comment(lib, "ws2_32.lib")
+typedef int socklen_t;
+#define CLOSE_SOCKET closesocket
 #else
-    #include <unistd.h>
-    #include <sys/socket.h>
-    #include <netinet/in.h>
-    #include <arpa/inet.h>
-    typedef int SOCKET;
-    const int INVALID_SOCKET = -1;
-    const int SOCKET_ERROR = -1;
-    #define CLOSE_SOCKET close
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+typedef int SOCKET;
+const int INVALID_SOCKET = -1;
+const int SOCKET_ERROR = -1;
+#define CLOSE_SOCKET close
 #endif
 
 // =========================================================================
@@ -67,141 +67,141 @@ bool is_x11() {
 }
 
 #ifdef _WIN32
-    // Windows native mouse
-    void mouse_press(int button) {
-        uint32_t flag_down = 0;
-        if (button == 0) flag_down = MOUSEEVENTF_LEFTDOWN;
-        else if (button == 1) flag_down = MOUSEEVENTF_RIGHTDOWN;
-        else if (button == 2) flag_down = MOUSEEVENTF_MIDDLEDOWN;
-        mouse_event(flag_down, 0, 0, 0, 0);
-    }
+// Windows native mouse
+void mouse_press(int button) {
+    uint32_t flag_down = 0;
+    if (button == 0) flag_down = MOUSEEVENTF_LEFTDOWN;
+    else if (button == 1) flag_down = MOUSEEVENTF_RIGHTDOWN;
+    else if (button == 2) flag_down = MOUSEEVENTF_MIDDLEDOWN;
+    mouse_event(flag_down, 0, 0, 0, 0);
+}
 
-    void mouse_release(int button) {
-        uint32_t flag_up = 0;
-        if (button == 0) flag_up = MOUSEEVENTF_LEFTUP;
-        else if (button == 1) flag_up = MOUSEEVENTF_RIGHTUP;
-        else if (button == 2) flag_up = MOUSEEVENTF_MIDDLEUP;
-        mouse_event(flag_up, 0, 0, 0, 0);
-    }
+void mouse_release(int button) {
+    uint32_t flag_up = 0;
+    if (button == 0) flag_up = MOUSEEVENTF_LEFTUP;
+    else if (button == 1) flag_up = MOUSEEVENTF_RIGHTUP;
+    else if (button == 2) flag_up = MOUSEEVENTF_MIDDLEUP;
+    mouse_event(flag_up, 0, 0, 0, 0);
+}
 
 #elif defined(__APPLE__)
-    // macOS native mouse
-    #include <CoreGraphics/CoreGraphics.h>
-    
-    void mouse_press(int button) {
-        CGEventType down_type;
-        CGMouseButton cg_button;
-        
-        if (button == 0) {
-            down_type = kCGEventLeftMouseDown;
-            cg_button = kCGMouseButtonLeft;
-        } else if (button == 1) {
-            down_type = kCGEventRightMouseDown;
-            cg_button = kCGMouseButtonRight;
-        } else {
-            down_type = kCGEventOtherMouseDown;
-            cg_button = kCGMouseButtonCenter;
-        }
-        
-        CGPoint pos = CGEventGetLocation(CGEventCreate(NULL));
-        CGEventRef event = CGEventCreateMouseEvent(NULL, down_type, pos, cg_button);
-        CGEventPost(kCGHIDEventTap, event);
-        CFRelease(event);
+// macOS native mouse
+#include <CoreGraphics/CoreGraphics.h>
+
+void mouse_press(int button) {
+    CGEventType down_type;
+    CGMouseButton cg_button;
+
+    if (button == 0) {
+        down_type = kCGEventLeftMouseDown;
+        cg_button = kCGMouseButtonLeft;
+    } else if (button == 1) {
+        down_type = kCGEventRightMouseDown;
+        cg_button = kCGMouseButtonRight;
+    } else {
+        down_type = kCGEventOtherMouseDown;
+        cg_button = kCGMouseButtonCenter;
     }
 
-    void mouse_release(int button) {
-        CGEventType up_type;
-        CGMouseButton cg_button;
-        
-        if (button == 0) {
-            up_type = kCGEventLeftMouseUp;
-            cg_button = kCGMouseButtonLeft;
-        } else if (button == 1) {
-            up_type = kCGEventRightMouseUp;
-            cg_button = kCGMouseButtonRight;
-        } else {
-            up_type = kCGEventOtherMouseUp;
-            cg_button = kCGMouseButtonCenter;
-        }
-        
-        CGPoint pos = CGEventGetLocation(CGEventCreate(NULL));
-        CGEventRef event = CGEventCreateMouseEvent(NULL, up_type, pos, cg_button);
-        CGEventPost(kCGHIDEventTap, event);
-        CFRelease(event);
+    CGPoint pos = CGEventGetLocation(CGEventCreate(NULL));
+    CGEventRef event = CGEventCreateMouseEvent(NULL, down_type, pos, cg_button);
+    CGEventPost(kCGHIDEventTap, event);
+    CFRelease(event);
+}
+
+void mouse_release(int button) {
+    CGEventType up_type;
+    CGMouseButton cg_button;
+
+    if (button == 0) {
+        up_type = kCGEventLeftMouseUp;
+        cg_button = kCGMouseButtonLeft;
+    } else if (button == 1) {
+        up_type = kCGEventRightMouseUp;
+        cg_button = kCGMouseButtonRight;
+    } else {
+        up_type = kCGEventOtherMouseUp;
+        cg_button = kCGMouseButtonCenter;
     }
+
+    CGPoint pos = CGEventGetLocation(CGEventCreate(NULL));
+    CGEventRef event = CGEventCreateMouseEvent(NULL, up_type, pos, cg_button);
+    CGEventPost(kCGHIDEventTap, event);
+    CFRelease(event);
+}
 
 #else
-    // Linux: X11 or Wayland
-    #include <X11/Xlib.h>
-    #include <X11/extensions/XTest.h>
-    
-    Display* x11_display = nullptr;
-    bool x11_available = false;
+// Linux: X11 or Wayland
+#include <X11/Xlib.h>
+#include <X11/extensions/XTest.h>
 
-    void init_x11() {
-        if (!x11_available && !x11_display) {
-            x11_display = XOpenDisplay(nullptr);
-            x11_available = (x11_display != nullptr);
-            if (x11_available) {
-                std::cout << "[Backend] X11 XTest available" << std::endl;
-            }
+Display* x11_display = nullptr;
+bool x11_available = false;
+
+void init_x11() {
+    if (!x11_available && !x11_display) {
+        x11_display = XOpenDisplay(nullptr);
+        x11_available = (x11_display != nullptr);
+        if (x11_available) {
+            std::cout << "[Backend] X11 XTest available" << std::endl;
         }
     }
+}
 
-    // X11 implementation (fast)
-    void mouse_press_x11(int button) {
-        if (!x11_display) init_x11();
-        if (x11_display) {
-            unsigned int btn = (button == 1) ? Button3 : (button == 2) ? Button2 : Button1;
-            XTestFakeButtonEvent(x11_display, btn, True, CurrentTime);
-            XFlush(x11_display);
-        }
+// X11 implementation (fast)
+void mouse_press_x11(int button) {
+    if (!x11_display) init_x11();
+    if (x11_display) {
+        unsigned int btn = (button == 1) ? Button3 : (button == 2) ? Button2 : Button1;
+        XTestFakeButtonEvent(x11_display, btn, True, CurrentTime);
+        XFlush(x11_display);
     }
+}
 
-    void mouse_release_x11(int button) {
-        if (!x11_display) init_x11();
-        if (x11_display) {
-            unsigned int btn = (button == 1) ? Button3 : (button == 2) ? Button2 : Button1;
-            XTestFakeButtonEvent(x11_display, btn, False, CurrentTime);
-            XFlush(x11_display);
-        }
+void mouse_release_x11(int button) {
+    if (!x11_display) init_x11();
+    if (x11_display) {
+        unsigned int btn = (button == 1) ? Button3 : (button == 2) ? Button2 : Button1;
+        XTestFakeButtonEvent(x11_display, btn, False, CurrentTime);
+        XFlush(x11_display);
     }
+}
 
-    // Wayland fallback: uinput via system call
-    void mouse_press_uinput(int button) {
-        int btn_code = (button == 0) ? 272 : (button == 1) ? 273 : 274;  // BTN_LEFT, BTN_RIGHT, BTN_MIDDLE
-        std::string cmd = "echo 'input event' | sudo -n bash -c 'echo " + std::to_string(btn_code) + " > /dev/uinput' 2>/dev/null";
+// Wayland fallback: uinput via system call
+void mouse_press_uinput(int button) {
+    int btn_code = (button == 0) ? 272 : (button == 1) ? 273 : 274;  // BTN_LEFT, BTN_RIGHT, BTN_MIDDLE
+    std::string cmd = "echo 'input event' | sudo -n bash -c 'echo " + std::to_string(btn_code) + " > /dev/uinput' 2>/dev/null";
+    system(cmd.c_str());
+}
+
+void mouse_release_uinput(int button) {
+    // Wayland uinput is complex; using xdotool fallback
+    int btn_str = (button == 0) ? 1 : (button == 1) ? 3 : 2;
+    std::string cmd = "xdotool mouseup " + std::to_string(btn_str) + " 2>/dev/null";
+    system(cmd.c_str());
+}
+
+// Smart wrapper
+void mouse_press(int button) {
+    if (is_x11()) {
+        mouse_press_x11(button);
+    } else if (is_wayland()) {
+        // Wayland: try xdotool first, then uinput
+        int btn_str = (button == 0) ? 1 : (button == 1) ? 3 : 2;
+        std::string cmd = "xdotool mousedown " + std::to_string(btn_str) + " 2>/dev/null";
         system(cmd.c_str());
     }
+}
 
-    void mouse_release_uinput(int button) {
-        // Wayland uinput is complex; using xdotool fallback
+void mouse_release(int button) {
+    if (is_x11()) {
+        mouse_release_x11(button);
+    } else if (is_wayland()) {
         int btn_str = (button == 0) ? 1 : (button == 1) ? 3 : 2;
         std::string cmd = "xdotool mouseup " + std::to_string(btn_str) + " 2>/dev/null";
         system(cmd.c_str());
     }
-
-    // Smart wrapper
-    void mouse_press(int button) {
-        if (is_x11()) {
-            mouse_press_x11(button);
-        } else if (is_wayland()) {
-            // Wayland: try xdotool first, then uinput
-            int btn_str = (button == 0) ? 1 : (button == 1) ? 3 : 2;
-            std::string cmd = "xdotool mousedown " + std::to_string(btn_str) + " 2>/dev/null";
-            system(cmd.c_str());
-        }
-    }
-
-    void mouse_release(int button) {
-        if (is_x11()) {
-            mouse_release_x11(button);
-        } else if (is_wayland()) {
-            int btn_str = (button == 0) ? 1 : (button == 1) ? 3 : 2;
-            std::string cmd = "xdotool mouseup " + std::to_string(btn_str) + " 2>/dev/null";
-            system(cmd.c_str());
-        }
-    }
+}
 #endif
 
 // =========================================================================
@@ -223,7 +223,7 @@ struct ClickerConfig {
 
 class ClickerEngine {
 public:
-    ClickerEngine() 
+    ClickerEngine()
         : enabled_(false), click_count_(0), click_thread_(nullptr) {}
 
     ~ClickerEngine() {
@@ -257,6 +257,14 @@ public:
             delete click_thread_;
             click_thread_ = nullptr;
         }
+    }
+
+    // Replace the settings while running. click_loop() copies config_ under
+    // the mutex at the start of every click, so this takes effect on the
+    // next click without restarting the clicker or resetting the counter.
+    void update_config(const ClickerConfig& cfg) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        config_ = cfg;
     }
 
     bool is_enabled() const {
@@ -336,7 +344,7 @@ class TcpServer {
 public:
     TcpServer(int port, ClickerEngine& engine)
         : port_(port), engine_(engine), running_(false), server_socket_(INVALID_SOCKET),
-          server_thread_(nullptr) {}
+        server_thread_(nullptr) {}
 
     ~TcpServer() {
         stop();
@@ -412,19 +420,64 @@ private:
         }
     }
 
+    // The connection stays open: the frontend sends many commands over it
+    // (START on key press, STOP on key release, UPDATE on every setting
+    // change). Commands are newline-terminated.
     void handle_client(SOCKET client_socket) {
-        char buffer[1024] = {};
+        std::string pending;
+        char buffer[1024];
 
-        int bytes_received = recv(client_socket, buffer, sizeof(buffer) - 1, 0);
-        if (bytes_received > 0) {
-            buffer[bytes_received] = '\0';
-            std::string request(buffer);
-            std::string response = process_request(request);
+        while (true) {
+            int n = recv(client_socket, buffer, sizeof(buffer), 0);
+            if (n <= 0) break;  // client closed the connection
+            pending.append(buffer, n);
 
-            send(client_socket, response.c_str(), response.length(), 0);
+            size_t pos;
+            while ((pos = pending.find('\n')) != std::string::npos) {
+                std::string line = pending.substr(0, pos);
+                pending.erase(0, pos + 1);
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                if (line.empty()) continue;
+
+                std::string response = process_request(line);
+                send(client_socket, response.c_str(), (int)response.length(), 0);
+            }
         }
 
         CLOSE_SOCKET(client_socket);
+    }
+
+    // Parses "key=value key=value ..." pairs shared by START and UPDATE.
+    static ClickerConfig parse_config(std::istringstream& iss) {
+        ClickerConfig cfg;
+
+        std::string pair;
+        while (iss >> pair) {
+            size_t eq = pair.find('=');
+            if (eq == std::string::npos) continue;
+
+            std::string key = pair.substr(0, eq);
+            std::string val = pair.substr(eq + 1);
+
+            try {
+                if (key == "cps") {
+                    cfg.cps = std::stod(val);
+                } else if (key == "duty") {
+                    cfg.duty_cycle = std::stoi(val);
+                } else if (key == "button") {
+                    cfg.mouse_button = (val == "right") ? 1 : (val == "middle") ? 2 : 0;
+                } else if (key == "randomize") {
+                    cfg.randomize = (val == "1");
+                } else if (key == "limit_enabled") {
+                    cfg.click_limit_enabled = (val == "1");
+                } else if (key == "limit") {
+                    cfg.click_limit = std::stoi(val);
+                }
+            } catch (const std::exception&) {
+                // Bad number: keep the default for this field.
+            }
+        }
+        return cfg;
     }
 
     std::string process_request(const std::string& request) {
@@ -433,32 +486,14 @@ private:
         iss >> cmd;
 
         if (cmd == "START") {
-            ClickerConfig cfg;
-
-            std::string pair;
-            while (iss >> pair) {
-                size_t eq = pair.find('=');
-                if (eq != std::string::npos) {
-                    std::string key = pair.substr(0, eq);
-                    std::string val = pair.substr(eq + 1);
-
-                    if (key == "cps") {
-                        cfg.cps = std::stod(val);
-                    } else if (key == "duty") {
-                        cfg.duty_cycle = std::stoi(val);
-                    } else if (key == "button") {
-                        cfg.mouse_button = (val == "right") ? 1 : (val == "middle") ? 2 : 0;
-                    } else if (key == "randomize") {
-                        cfg.randomize = (val == "1");
-                    } else if (key == "limit_enabled") {
-                        cfg.click_limit_enabled = (val == "1");
-                    } else if (key == "limit") {
-                        cfg.click_limit = std::stoi(val);
-                    }
-                }
-            }
-
-            engine_.start(cfg);
+            engine_.start(parse_config(iss));
+            return "OK\n";
+        }
+        else if (cmd == "UPDATE") {
+            // Applies new settings to an already running clicker; picked up
+            // on the next click (same as the original app reading the UI
+            // controls on every timer tick).
+            engine_.update_config(parse_config(iss));
             return "OK\n";
         }
         else if (cmd == "STOP") {
@@ -492,15 +527,15 @@ int main(int argc, char* argv[]) {
 
     // Platform info
     std::cout << "URSF AutoClicker Backend (Wayland Compatible)" << std::endl;
-    #ifdef __linux__
-        if (is_wayland()) {
-            std::cout << "[Backend] Detected: Wayland (using xdotool)" << std::endl;
-        } else if (is_x11()) {
-            std::cout << "[Backend] Detected: X11 (using XTest)" << std::endl;
-        } else {
-            std::cout << "[Backend] Detected: Unknown session type" << std::endl;
-        }
-    #endif
+#ifdef __linux__
+    if (is_wayland()) {
+        std::cout << "[Backend] Detected: Wayland (using xdotool)" << std::endl;
+    } else if (is_x11()) {
+        std::cout << "[Backend] Detected: X11 (using XTest)" << std::endl;
+    } else {
+        std::cout << "[Backend] Detected: Unknown session type" << std::endl;
+    }
+#endif
 
     ClickerEngine engine;
     TcpServer server(port, engine);

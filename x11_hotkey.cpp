@@ -11,6 +11,7 @@
 
 #include <X11/Xlib.h>
 #include <X11/keysym.h>
+#include <X11/XKBlib.h>
 #include <unistd.h>
 #include <string>
 
@@ -69,18 +70,30 @@ void X11HotkeyListener::run() {
     XSync(display, False);
     XSetErrorHandler(old_handler);
 
-    XSelectInput(display, root, KeyPressMask);
+    // Without "detectable auto-repeat", holding a key makes X11 send a stream
+    // of fake Release+Press pairs, which would make Hold mode flicker.
+    XkbSetDetectableAutoRepeat(display, True, nullptr);
+
+    XSelectInput(display, root, KeyPressMask | KeyReleaseMask);
 
     running_ = true;
+
+    bool key_down = false;  // swallow auto-repeat presses while held
 
     XEvent event;
     while (running_) {
         if (XPending(display) > 0) {
             XNextEvent(display, &event);
-            if (event.type == KeyPress) {
+            if (event.type == KeyPress || event.type == KeyRelease) {
                 XKeyEvent* ke = reinterpret_cast<XKeyEvent*>(&event);
                 if (ke->keycode == keycode) {
-                    emit hotkeyPressed();
+                    if (event.type == KeyPress && !key_down) {
+                        key_down = true;
+                        emit hotkeyPressed();
+                    } else if (event.type == KeyRelease && key_down) {
+                        key_down = false;
+                        emit hotkeyReleased();
+                    }
                 }
             }
         } else {

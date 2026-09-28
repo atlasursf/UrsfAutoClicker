@@ -28,7 +28,8 @@ protected:
     void run() override;
 
 signals:
-    void hotkeyPressed();
+    void hotkeyPressed();   // emitted once per physical press (no auto-repeat)
+    void hotkeyReleased();  // needed by Hold mode
     void errorOccurred(const QString& message);
 
 private:
