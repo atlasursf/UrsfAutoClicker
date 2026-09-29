@@ -4,72 +4,59 @@ project(UrsfAutoClicker CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Find Qt6
+# Find Qt6 (no Network component anymore: everything runs in one process)
 find_package(Qt6 COMPONENTS
     Core
     Gui
     Widgets
-    Network
     REQUIRED)
 
 # Auto-generate MOC files
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
-# Frontend executable
-add_executable(autoclicker-frontend
+# Single executable: GUI + click engine in one process
+add_executable(autoclicker
     frontend.cpp
+    clicker_engine.cpp
+    clicker_engine.h
     resources.qrc
 )
 
-if(UNIX AND NOT APPLE)
-    target_sources(autoclicker-frontend PRIVATE x11_hotkey.cpp x11_hotkey.h)
-endif()
-
-target_link_libraries(autoclicker-frontend
+target_link_libraries(autoclicker
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets
-    Qt6::Network
 )
 
-if(UNIX AND NOT APPLE)
-    # Linux - X11 needed by frontend for the global hotkey (XGrabKey)
-    find_package(X11 REQUIRED)
-    target_link_libraries(autoclicker-frontend ${X11_LIBRARIES})
-    target_include_directories(autoclicker-frontend PRIVATE ${X11_INCLUDE_DIR})
+# std::thread needs pthread outside of Windows/MSVC
+if(NOT WIN32)
+    find_package(Threads REQUIRED)
+    target_link_libraries(autoclicker Threads::Threads)
 endif()
 
-# Backend executable (Wayland-compatible)
-add_executable(clicker-backend
-    backend_wayland.cpp
-)
-
-# Platform-specific linking
 if(WIN32)
-    target_link_libraries(clicker-backend ws2_32)
+    # GetAsyncKeyState (hotkey poll) + mouse_event (click simulation)
+    target_link_libraries(autoclicker user32)
 
 elseif(APPLE)
-    target_link_libraries(clicker-backend "-framework Cocoa" "-framework CoreGraphics" pthread)
+    target_link_libraries(autoclicker "-framework Cocoa" "-framework CoreGraphics")
 
 else()
-    # Linux - X11 and Wayland support
-    find_package(X11 QUIET)
+    # Linux - X11 needed for the global hotkey (XGrabKey) and, when
+    # available, XTest for fast native click simulation. X11 itself is
+    # required (the hotkey grab needs it); XTest is optional and clicker_engine
+    # falls back to xdotool under pure Wayland sessions if it's missing.
+    find_package(X11 REQUIRED)
+    target_link_libraries(autoclicker ${X11_LIBRARIES})
+    target_include_directories(autoclicker PRIVATE ${X11_INCLUDE_DIR})
 
-    if(X11_FOUND)
-        # X11 is optional (may not be available on pure Wayland systems)
-        target_link_libraries(clicker-backend ${X11_LIBRARIES})
-        if(X11_Xtst_LIB)
-            target_link_libraries(clicker-backend ${X11_Xtst_LIB})
-        endif()
-        target_include_directories(clicker-backend PRIVATE ${X11_INCLUDE_DIR})
-        target_compile_definitions(clicker-backend PRIVATE HAVE_X11)
+    if(X11_Xtst_LIB)
+        target_link_libraries(autoclicker ${X11_Xtst_LIB})
     endif()
 
-    # Always link pthread
-    target_link_libraries(clicker-backend pthread)
-
+    target_sources(autoclicker PRIVATE x11_hotkey.cpp x11_hotkey.h)
 endif()
 
 # Installation
-install(TARGETS autoclicker-frontend clicker-backend DESTINATION bin)
+install(TARGETS autoclicker DESTINATION bin)

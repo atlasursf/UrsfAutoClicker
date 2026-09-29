@@ -1,6 +1,9 @@
 /**
  * URSF AutoClicker - Qt6 Frontend
  *
+ * Single-process build: the click engine (clicker_engine.h/.cpp) runs
+ * in-process on its own std::thread. No TCP loopback, no child process.
+ *
  * Cross-platform UI with system tray icon.
  *
  * Build:
@@ -9,21 +12,20 @@
  *   make
  *
  * Dependencies:
- *   - Qt6 (Core, Gui, Widgets, Network)
+ *   - Qt6 (Core, Gui, Widgets)
  *   - CMake
  */
 
 #include <iostream>
 #include <memory>
-#include <thread>
-#include <chrono>
-#include <atomic>
 
 #ifdef _WIN32
 #include <windows.h>
 #elif defined(__linux__)
 #include "x11_hotkey.h"
 #endif
+
+#include "clicker_engine.h"
 
 #include <QApplication>
 #include <QMainWindow>
@@ -42,11 +44,7 @@
 #include <QAction>
 #include <QKeySequence>
 #include <QKeyEvent>
-#include <QTcpSocket>
-#include <QHostAddress>
 #include <QTimer>
-#include <QThread>
-#include <QProcess>
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -62,188 +60,6 @@
 #include <QMap>
 
 // =========================================================================
-// Backend Connection Manager (runs in background thread)
-// =========================================================================
-
-class BackendConnection : public QObject {
-    Q_OBJECT
-
-public:
-    BackendConnection(QObject* parent = nullptr)
-        : QObject(parent), socket_(nullptr), backend_process_(nullptr),
-        is_clicking_(false), click_count_(0) {
-        connect_timer_.setSingleShot(true);
-    }
-
-    ~BackendConnection() {
-        stop_backend();
-    }
-
-    bool start_backend(int port = 9999) {
-        // Start backend process if not running
-        if (!backend_process_) {
-            backend_process_ = new QProcess(this);
-            backend_process_->start("./clicker-backend", QStringList() << QString::number(port));
-
-            if (!backend_process_->waitForStarted(3000)) {
-                emit error_occurred("Failed to start backend process");
-                return false;
-            }
-
-            // Small delay for backend to open listening socket
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        }
-
-        // Try to connect to backend
-        port_ = port;
-        attempt_connect(0);
-        return true;
-    }
-
-    void stop_backend() {
-        if (backend_process_) {
-            backend_process_->terminate();
-            backend_process_->waitForFinished(2000);
-            backend_process_->kill();
-            backend_process_->waitForFinished();
-        }
-    }
-
-    void ensure_connected() {
-        if (!socket_ || socket_->state() != QTcpSocket::ConnectedState) {
-            if (socket_) {
-                socket_->disconnectFromHost();
-                socket_->deleteLater();
-                socket_ = nullptr;
-            }
-            attempt_connect(0);
-        }
-    }
-
-    // "key=value ..." settings string shared by START and UPDATE.
-    // QString::number() is locale-independent, so a Turkish locale can't
-    // turn "20.5" into "20,5" and break the backend's parser.
-    static QString build_settings(double cps, int duty, const QString& button,
-                                  bool randomize, bool limit_enabled, int limit) {
-        return QString("cps=%1 duty=%2 button=%3 randomize=%4 limit_enabled=%5 limit=%6")
-        .arg(QString::number(cps, 'f', 1))
-            .arg(duty)
-            .arg(button)
-            .arg(randomize ? 1 : 0)
-            .arg(limit_enabled ? 1 : 0)
-            .arg(limit);
-    }
-
-    // Applies changed settings to a running clicker (no restart, no state change).
-    void send_update_command(double cps, int duty, const QString& button,
-                             bool randomize, bool limit_enabled, int limit) {
-        if (!socket_ || socket_->state() != QTcpSocket::ConnectedState) {
-            return;  // nothing running on our side that could be updated
-        }
-
-        QString cmd = "UPDATE " + build_settings(cps, duty, button, randomize, limit_enabled, limit) + "\n";
-        socket_->write(cmd.toUtf8());
-        socket_->flush();
-    }
-
-    void send_start_command(double cps, int duty, const QString& button,
-                            bool randomize, bool limit_enabled, int limit) {
-        ensure_connected();
-
-        if (!socket_ || socket_->state() != QTcpSocket::ConnectedState) {
-            emit error_occurred("Not connected to backend");
-            return;
-        }
-
-        QString cmd = "START " + build_settings(cps, duty, button, randomize, limit_enabled, limit) + "\n";
-
-        socket_->write(cmd.toUtf8());
-        socket_->flush();
-
-        is_clicking_ = true;
-        click_count_ = 0;
-        emit status_changed("Clicking...");
-        emit icon_changed(true);  // Tray icon: ON
-    }
-
-    void send_stop_command() {
-        ensure_connected();
-
-        if (!socket_ || socket_->state() != QTcpSocket::ConnectedState) {
-            emit error_occurred("Not connected to backend");
-            return;
-        }
-
-        socket_->write("STOP\n");
-        socket_->flush();
-
-        is_clicking_ = false;
-        emit status_changed("Stopped");
-        emit icon_changed(false);  // Tray icon: OFF
-    }
-
-    bool is_clicking() const { return is_clicking_; }
-    int get_click_count() const { return click_count_; }
-
-signals:
-    void connected();
-    void disconnected();
-    void error_occurred(const QString& error);
-    void status_changed(const QString& status);
-    void icon_changed(bool clicking);  // true = ON, false = OFF
-
-private slots:
-    void attempt_connect(int attempt) {
-        if (!socket_) {
-            socket_ = new QTcpSocket(this);
-            connect(socket_, &QTcpSocket::connected, this, &BackendConnection::on_connected);
-            connect(socket_, &QTcpSocket::disconnected, this, &BackendConnection::on_disconnected);
-
-            // Qt6.7+ compatible error signal handling
-            connect(socket_, static_cast<void(QTcpSocket::*)(QAbstractSocket::SocketError)>(&QTcpSocket::errorOccurred),
-                    this, &BackendConnection::on_error);
-
-            connect(socket_, &QTcpSocket::readyRead, this, &BackendConnection::on_read);
-        }
-
-        socket_->connectToHost(QHostAddress::LocalHost, port_);
-
-        if (attempt < 10) {  // Try for up to 5 seconds
-            connect_timer_.singleShot(500, this, [this, attempt]() {
-                attempt_connect(attempt + 1);
-            });
-        }
-    }
-
-    void on_connected() {
-        emit connected();
-        std::cout << "Connected to backend" << std::endl;
-    }
-
-    void on_disconnected() {
-        emit disconnected();
-    }
-
-    void on_error(QAbstractSocket::SocketError err) {
-        Q_UNUSED(err);
-        // Silently retry
-    }
-
-    void on_read() {
-        QString response = QString::fromUtf8(socket_->readAll());
-        // Process response if needed
-    }
-
-private:
-    QTcpSocket* socket_;
-    QProcess* backend_process_;
-    bool is_clicking_;
-    int click_count_;
-    int port_;
-    QTimer connect_timer_;
-};
-
-// =========================================================================
 // Main Application Window
 // =========================================================================
 
@@ -252,23 +68,13 @@ class AutoClickerWindow : public QMainWindow {
 
 public:
     AutoClickerWindow(QWidget* parent = nullptr)
-        : QMainWindow(parent), backend_connection_(nullptr),
+        : QMainWindow(parent),
         selecting_key_(false), activation_key_(Qt::Key_F6),
-        prev_key_state_(false) {
+        prev_key_state_(false), ui_thinks_clicking_(false) {
         setWindowTitle("URSF AutoClicker");
         setWindowIcon(QIcon(":/icons/off.png"));
 
         resize(520, 550);
-
-
-        // Create backend connection
-        backend_connection_ = new BackendConnection(this);
-        connect(backend_connection_, &BackendConnection::icon_changed,
-                this, &AutoClickerWindow::on_icon_changed);
-        connect(backend_connection_, &BackendConnection::status_changed,
-                this, &AutoClickerWindow::on_status_changed);
-        connect(backend_connection_, &BackendConnection::error_occurred,
-                this, &AutoClickerWindow::on_backend_error);
 
         // Setup UI
         setup_ui();
@@ -280,8 +86,12 @@ public:
         // (window close or tray "Quit", which never triggers closeEvent).
         connect(qApp, &QCoreApplication::aboutToQuit, this, &AutoClickerWindow::save_config);
 
-        // Start backend
-        backend_connection_->start_backend(9999);
+        // Polls the engine so the UI notices when a click-limit stop
+        // happens on the background thread (nothing else pushes that
+        // change to the UI, since there's no socket/signal for it now).
+        sync_timer_ = new QTimer(this);
+        connect(sync_timer_, &QTimer::timeout, this, &AutoClickerWindow::sync_with_engine);
+        sync_timer_->start(150);
 
 #ifdef __linux__
         // Real global hotkey via X11 (works even when window isn't focused)
@@ -581,37 +391,47 @@ private:
                 : QString("● Stopped — Press %1").arg(activation_key_name_));
     }
 
+    ClickerConfig build_config() const {
+        ClickerConfig cfg;
+        cfg.cps = cps_spin_->value();
+        cfg.duty_cycle = duty_spin_->value();
+        cfg.randomize = randomize_check_->isChecked();
+        cfg.click_limit_enabled = limit_check_->isChecked();
+        cfg.click_limit = limit_spin_->value();
+        cfg.mouse_button = left_radio_->isChecked() ? 0 : right_radio_->isChecked() ? 1 : 2;
+        return cfg;
+    }
+
+    void set_icon(bool clicking) {
+        if (clicking) {
+            tray_icon_->setIcon(icon_on_);
+            setWindowIcon(icon_on_);
+        } else {
+            tray_icon_->setIcon(icon_off_);
+            setWindowIcon(icon_off_);
+        }
+    }
+
     void start_clicker() {
-        backend_connection_->send_start_command(
-            cps_spin_->value(),
-            duty_spin_->value(),
-            current_button_name(),
-            randomize_check_->isChecked(),
-            limit_check_->isChecked(),
-            limit_spin_->value());
+        engine_.start(build_config());
+        ui_thinks_clicking_ = true;
+        status_label_->setText("● Clicking...");
+        set_icon(true);
     }
 
     void stop_clicker() {
-        backend_connection_->send_stop_command();
-        // Only fall back to the idle text if the stop really went through.
-        if (!backend_connection_->is_clicking()) {
-            update_idle_status();
-        }
+        engine_.stop();
+        ui_thinks_clicking_ = false;
+        set_icon(false);
+        update_idle_status();
     }
 
     // Sends the current UI settings to a running clicker. The original app
     // re-read every control on each timer tick, so changing CPS / randomize /
     // duty cycle / button / limit while clicking took effect immediately.
     void push_live_settings() {
-        if (!backend_connection_->is_clicking()) return;
-
-        backend_connection_->send_update_command(
-            cps_spin_->value(),
-            duty_spin_->value(),
-            current_button_name(),
-            randomize_check_->isChecked(),
-            limit_check_->isChecked(),
-            limit_spin_->value());
+        if (!engine_.is_enabled()) return;
+        engine_.update_config(build_config());
     }
 
     void connect_live_settings() {
@@ -630,9 +450,9 @@ private:
         // Switching modes: refresh the idle text; and, like the original,
         // switching to Hold while clicking stops it (the key isn't held).
         connect(hold_radio_, &QRadioButton::toggled, this, [this](bool) {
-            if (hold_radio_->isChecked() && backend_connection_->is_clicking()) {
+            if (hold_radio_->isChecked() && engine_.is_enabled()) {
                 stop_clicker();
-            } else if (!backend_connection_->is_clicking()) {
+            } else if (!engine_.is_enabled()) {
                 update_idle_status();
             }
         });
@@ -702,7 +522,7 @@ private slots:
     }
 
     void toggle_clicker() {
-        if (backend_connection_->is_clicking()) {
+        if (engine_.is_enabled()) {
             stop_clicker();
         } else {
             start_clicker();
@@ -713,34 +533,27 @@ private slots:
     // Hold mode:   clicking only while the key is held down.
     void on_hotkey_pressed() {
         if (hold_radio_->isChecked()) {
-            if (!backend_connection_->is_clicking()) start_clicker();
+            if (!engine_.is_enabled()) start_clicker();
         } else {
             toggle_clicker();
         }
     }
 
     void on_hotkey_released() {
-        if (hold_radio_->isChecked() && backend_connection_->is_clicking()) {
+        if (hold_radio_->isChecked() && engine_.is_enabled()) {
             stop_clicker();
         }
     }
 
-    void on_icon_changed(bool clicking) {
-        if (clicking) {
-            tray_icon_->setIcon(icon_on_);
-            setWindowIcon(icon_on_);
-        } else {
-            tray_icon_->setIcon(icon_off_);
-            setWindowIcon(icon_off_);
+    // Catches the case the old TCP version couldn't: the engine hitting its
+    // click limit and stopping itself on the background thread. There's no
+    // signal for that anymore (it's all in-process now), so we poll.
+    void sync_with_engine() {
+        if (ui_thinks_clicking_ && !engine_.is_enabled()) {
+            ui_thinks_clicking_ = false;
+            set_icon(false);
+            status_label_->setText("● Stopped — limit reached");
         }
-    }
-
-    void on_status_changed(const QString& status) {
-        status_label_->setText("● " + status);
-    }
-
-    void on_backend_error(const QString& error) {
-        QMessageBox::warning(this, "Backend Error", error);
     }
 
 protected:
@@ -751,7 +564,7 @@ protected:
             activation_label_->setText(key_name);
             selecting_key_ = false;
             select_button_->setEnabled(true);
-            if (!backend_connection_->is_clicking()) {
+            if (!engine_.is_enabled()) {
                 update_idle_status();  // "Press F7" / "Hold F7" follows the new key
             }
 
@@ -775,12 +588,15 @@ protected:
             hotkey_listener_->stop();
         }
 #endif
-        backend_connection_->stop_backend();
+        engine_.stop();
         QMainWindow::closeEvent(event);
     }
 
 private:
-    BackendConnection* backend_connection_;
+    ClickerEngine engine_;
+    QTimer* sync_timer_;
+    bool ui_thinks_clicking_;
+
     QSystemTrayIcon* tray_icon_;
     QIcon icon_on_, icon_off_;
 
