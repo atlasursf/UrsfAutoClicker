@@ -36,6 +36,7 @@
 #include <QPushButton>
 #include <QRadioButton>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QSpinBox>
 #include <QDoubleSpinBox>
 #include <QButtonGroup>
@@ -246,6 +247,24 @@ private:
         limit_group->setLayout(limit_layout);
         main_layout->addWidget(limit_group);
 
+        // ============ Tray Icon Group ============
+        QGroupBox* icon_group = new QGroupBox("Tray Icon", this);
+        QHBoxLayout* icon_layout = new QHBoxLayout();
+
+        icon_layout->addWidget(new QLabel("Style:"));
+        icon_style_combo_ = new QComboBox();
+        icon_style_combo_->addItem("Flat Color", "flat");
+        icon_style_combo_->addItem("Logo 1", "logo1");
+        icon_style_combo_->addItem("Logo 2", "logo2");
+        icon_layout->addWidget(icon_style_combo_);
+        icon_layout->addStretch();
+        connect(icon_style_combo_, &QComboBox::currentIndexChanged, this, [this](int) {
+            apply_icon_style(icon_style_combo_->currentData().toString());
+        });
+
+        icon_group->setLayout(icon_layout);
+        main_layout->addWidget(icon_group);
+
         // ============ Status Label ============
         main_layout->addStretch();
         status_label_ = new QLabel("● Stopped");
@@ -255,24 +274,55 @@ private:
         central->setLayout(main_layout);
     }
 
+    // Loads the "flat"/"logo1"/"logo2" icon pairs once. apply_icon_style()
+    // then just picks between these, so switching styles never touches disk.
+    void load_icon_sets() {
+        QPixmap on_pixmap(32, 32);
+        on_pixmap.fill(Qt::green);
+        QPixmap off_pixmap(32, 32);
+        off_pixmap.fill(Qt::red);
+        flat_on_ = QIcon(on_pixmap);
+        flat_off_ = QIcon(off_pixmap);
+
+        logo1_on_ = QIcon(":/icons/on.png");
+        logo1_off_ = QIcon(":/icons/off.png");
+        if (logo1_on_.isNull() || logo1_off_.isNull()) {
+            logo1_on_ = flat_on_;
+            logo1_off_ = flat_off_;
+        }
+
+        logo2_on_ = QIcon(":/icons/on2.png");
+        logo2_off_ = QIcon(":/icons/off2.png");
+        if (logo2_on_.isNull() || logo2_off_.isNull()) {
+            logo2_on_ = flat_on_;
+            logo2_off_ = flat_off_;
+        }
+    }
+
+    // Switches which pair icon_on_/icon_off_ point at, then refreshes
+    // whatever is currently shown (tray + window icon) to match.
+    void apply_icon_style(const QString& style) {
+        if (style == "logo2") {
+            icon_on_ = logo2_on_;
+            icon_off_ = logo2_off_;
+        } else if (style == "logo1") {
+            icon_on_ = logo1_on_;
+            icon_off_ = logo1_off_;
+        } else {
+            icon_on_ = flat_on_;
+            icon_off_ = flat_off_;
+        }
+        set_icon(ui_thinks_clicking_);
+    }
+
     void setup_tray_icon() {
         tray_icon_ = new QSystemTrayIcon(this);
 
-        // Custom logos, bundled via resources.qrc (icons/on.png, icons/off.png).
-        icon_on_ = QIcon(":/icons/on.png");
-        icon_off_ = QIcon(":/icons/off.png");
-
-        // Fallback to colored squares if the custom icons weren't bundled.
-        if (icon_on_.isNull() || icon_off_.isNull()) {
-            QPixmap on_pixmap(32, 32);
-            on_pixmap.fill(Qt::green);
-            QPixmap off_pixmap(32, 32);
-            off_pixmap.fill(Qt::red);
-            icon_on_ = QIcon(on_pixmap);
-            icon_off_ = QIcon(off_pixmap);
-        }
-
-        tray_icon_->setIcon(icon_off_);
+        load_icon_sets();
+        // Set via the combo (not a direct apply_icon_style call) so the
+        // dropdown's visible selection matches the icon actually shown,
+        // even on a first run where load_config() never touches it.
+        icon_style_combo_->setCurrentIndex(icon_style_combo_->findData("logo1"));
 
         // Tray menu
         QMenu* tray_menu = new QMenu(this);
@@ -326,6 +376,7 @@ private:
         obj["duty_cycle"] = duty_spin_->value();
         obj["click_limit_enabled"] = limit_check_->isChecked();
         obj["click_limit"] = limit_spin_->value();
+        obj["icon_style"] = icon_style_combo_->currentData().toString();
         obj["selected_apps"] = selected_apps_;  // kept as-is for the app filter feature
 
         const QString path = config_path();
@@ -378,6 +429,12 @@ private:
         duty_spin_->setValue(obj.value("duty_cycle").toInt(25));
         limit_check_->setChecked(obj.value("click_limit_enabled").toBool(false));
         limit_spin_->setValue(obj.value("click_limit").toInt(100));
+
+        const QString icon_style = obj.value("icon_style").toString("logo1");
+        const int style_index = icon_style_combo_->findData(icon_style);
+        if (style_index >= 0) {
+            icon_style_combo_->setCurrentIndex(style_index);  // emits currentIndexChanged -> apply_icon_style
+        }
 
         selected_apps_ = obj.value("selected_apps").toArray();
 
@@ -603,7 +660,11 @@ private:
     bool ui_thinks_clicking_;
 
     QSystemTrayIcon* tray_icon_;
-    QIcon icon_on_, icon_off_;
+    QComboBox* icon_style_combo_;
+    QIcon icon_on_, icon_off_;              // currently selected pair (what set_icon() shows)
+    QIcon flat_on_, flat_off_;
+    QIcon logo1_on_, logo1_off_;
+    QIcon logo2_on_, logo2_off_;
 
     QLabel* activation_label_;
     QPushButton* select_button_;
