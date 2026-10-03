@@ -16,7 +16,6 @@ jobs:
         with:
           version: '6.8.3'
           arch: 'win64_msvc2022_64'
-          modules: 'qtbase'
 
       - name: Configure
         run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
@@ -28,7 +27,7 @@ jobs:
         shell: powershell
         run: |
           mkdir dist
-          Copy-Item build\Release\autoclicker-frontend.exe dist\UrsfAutoClicker.exe
+          Copy-Item build\Release\autoclicker.exe dist\UrsfAutoClicker.exe
           windeployqt dist\UrsfAutoClicker.exe
 
       - name: Upload artifact
