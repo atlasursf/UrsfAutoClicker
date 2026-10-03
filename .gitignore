@@ -6,3 +6,30 @@ obj/
 Debug/
 Release/
 publish/
+
+# Qt Creator / Qt
+.qt/
+.qtcreator/
+.idea/
+
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# CMake
+build/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+compile_commands.json
+*_autogen/
+
+# Binaries
+autoclicker-frontend
+clicker-backend
+
+# Compiled objects
+*.o
+*.obj
