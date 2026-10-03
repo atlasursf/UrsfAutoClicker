@@ -20,6 +20,9 @@
 #include <memory>
 
 #ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX  // keep windows.h from macro-defining min/max (breaks std::min/max)
+#endif
 #include <windows.h>
 #elif defined(__linux__)
 #include "x11_hotkey.h"

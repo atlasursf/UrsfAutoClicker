@@ -12,9 +12,16 @@
  *   - macOS: CoreGraphics
  */
 
+// windows.h defines min/max macros that break std::max(...) calls below.
+#ifdef _WIN32
+#define NOMINMAX
+#endif
+
 #include "clicker_engine.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <random>
 

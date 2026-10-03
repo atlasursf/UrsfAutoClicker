@@ -44,7 +44,7 @@ std::string window_title(Display* d, Window w) {
     unsigned char* data = nullptr;
 
     if (XGetWindowProperty(d, w, net_wm_name, 0, 1024, False, utf8_string,
-                            &actual_type, &actual_format, &n_items, &bytes_after, &data) == Success
+                           &actual_type, &actual_format, &n_items, &bytes_after, &data) == Success
         && data) {
         std::string title(reinterpret_cast<char*>(data), n_items);
         XFree(data);
@@ -77,7 +77,7 @@ std::vector<AppInfo> list_running_apps() {
     unsigned char* data = nullptr;
 
     if (XGetWindowProperty(d, root, client_list, 0, ~0L, False, XA_WINDOW,
-                            &actual_type, &actual_format, &n_items, &bytes_after, &data) != Success
+                           &actual_type, &actual_format, &n_items, &bytes_after, &data) != Success
         || !data) {
         if (data) XFree(data);
         XCloseDisplay(d);
@@ -118,7 +118,7 @@ std::string active_app_identifier() {
 
     std::string result;
     if (XGetWindowProperty(d, root, active_window, 0, 1, False, XA_WINDOW,
-                            &actual_type, &actual_format, &n_items, &bytes_after, &data) == Success
+                           &actual_type, &actual_format, &n_items, &bytes_after, &data) == Success
         && data && n_items > 0) {
         Window active = *reinterpret_cast<Window*>(data);
         result = window_class_name(d, active);
@@ -132,9 +132,23 @@ std::string active_app_identifier() {
 // =========================================================================
 // Windows: EnumWindows + GetForegroundWindow, matched by exe basename
 // =========================================================================
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 
 namespace {
+
+// UTF-16 -> UTF-8. A plain per-character copy would mangle any non-ASCII
+// window title (Turkish ş/ğ/ı, etc.); the Qt side reads these as UTF-8.
+std::string to_utf8(const wchar_t* wstr, int len) {
+    if (len <= 0) return "";
+    int size = WideCharToMultiByte(CP_UTF8, 0, wstr, len, nullptr, 0, nullptr, nullptr);
+    if (size <= 0) return "";
+    std::string out(size, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, wstr, len, &out[0], size, nullptr, nullptr);
+    return out;
+}
 
 // Resolves a process id to its executable's basename (e.g. "steam.exe").
 // Requires only PROCESS_QUERY_LIMITED_INFORMATION, so this works without
@@ -150,7 +164,7 @@ std::string exe_basename_from_pid(DWORD pid) {
         std::wstring wpath(path, size);
         size_t slash = wpath.find_last_of(L"\\/");
         std::wstring base = (slash == std::wstring::npos) ? wpath : wpath.substr(slash + 1);
-        result.assign(base.begin(), base.end());  // exe names are ASCII in practice
+        result = to_utf8(base.c_str(), static_cast<int>(base.size()));
     }
     CloseHandle(process);
     return result;
@@ -174,9 +188,7 @@ BOOL CALLBACK enum_windows_proc(HWND hwnd, LPARAM lparam) {
         if (app.id == id) return TRUE;  // one entry per application, not per window
     }
 
-    std::wstring wtitle(title, len);
-    std::string display(wtitle.begin(), wtitle.end());
-    out->push_back({id, display});
+    out->push_back({id, to_utf8(title, len)});
     return TRUE;
 }
 
