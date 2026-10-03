@@ -76,7 +76,7 @@ class AutoClickerWindow : public QMainWindow {
 public:
     AutoClickerWindow(QWidget* parent = nullptr)
         : QMainWindow(parent),
-        selecting_key_(false), activation_key_(Qt::Key_F6),
+        selecting_key_(false), activation_key_(qt_key_to_vk(Qt::Key_F6)),
         prev_key_state_(false), ui_thinks_clicking_(false) {
         setWindowTitle("URSF AutoClicker");
         setWindowIcon(QIcon(":/icons/off.png"));
@@ -114,10 +114,11 @@ public:
         hotkey_listener_->set_key_name(x11_key_name(activation_key_name_));
         hotkey_listener_->start();
 #else
-        // Start global hotkey listener (100ms poll) — Windows GetAsyncKeyState
+        // Start global hotkey listener (10ms poll) — Windows GetAsyncKeyState
         hotkey_timer_ = new QTimer(this);
         connect(hotkey_timer_, &QTimer::timeout, this, &AutoClickerWindow::check_hotkey);
-        hotkey_timer_->start(100);
+        hotkey_timer_->setTimerType(Qt::PreciseTimer);
+        hotkey_timer_->start(10);
 #endif
     }
 
@@ -416,7 +417,7 @@ private:
             activation_label_->setText(key);
             QKeySequence seq = QKeySequence::fromString(key);
             if (!seq.isEmpty()) {
-                activation_key_ = static_cast<int>(seq[0].key());
+                activation_key_ = qt_key_to_vk(static_cast<int>(seq[0].key()));
             }
         }
 
@@ -554,6 +555,44 @@ private:
         });
     }
 
+    // Qt key codes (Qt::Key_F6 = 0x01000035) are NOT Windows virtual-key
+    // codes (VK_F6 = 0x75). GetAsyncKeyState() only understands the latter,
+    // so passing a Qt code to it silently never reports a press. Returns 0
+    // for keys we can't map (and on non-Windows, where it isn't used).
+    static int qt_key_to_vk(int qt_key) {
+#ifdef _WIN32
+        if (qt_key >= Qt::Key_F1 && qt_key <= Qt::Key_F24) return VK_F1 + (qt_key - Qt::Key_F1);
+        if (qt_key >= Qt::Key_A && qt_key <= Qt::Key_Z) return 'A' + (qt_key - Qt::Key_A);
+        if (qt_key >= Qt::Key_0 && qt_key <= Qt::Key_9) return '0' + (qt_key - Qt::Key_0);
+        switch (qt_key) {
+        case Qt::Key_Escape:    return VK_ESCAPE;
+        case Qt::Key_Return:
+        case Qt::Key_Enter:     return VK_RETURN;
+        case Qt::Key_Space:     return VK_SPACE;
+        case Qt::Key_Tab:       return VK_TAB;
+        case Qt::Key_Backspace: return VK_BACK;
+        case Qt::Key_Delete:    return VK_DELETE;
+        case Qt::Key_Insert:    return VK_INSERT;
+        case Qt::Key_Home:      return VK_HOME;
+        case Qt::Key_End:       return VK_END;
+        case Qt::Key_PageUp:    return VK_PRIOR;
+        case Qt::Key_PageDown:  return VK_NEXT;
+        case Qt::Key_Left:      return VK_LEFT;
+        case Qt::Key_Right:     return VK_RIGHT;
+        case Qt::Key_Up:        return VK_UP;
+        case Qt::Key_Down:      return VK_DOWN;
+        case Qt::Key_Pause:     return VK_PAUSE;
+        case Qt::Key_Print:     return VK_SNAPSHOT;
+        case Qt::Key_ScrollLock:return VK_SCROLL;
+        case Qt::Key_NumLock:   return VK_NUMLOCK;
+        default: break;
+        }
+#else
+        Q_UNUSED(qt_key);
+#endif
+        return 0;
+    }
+
 #ifdef __linux__
     // Qt's QKeySequence text and X11's key names don't always match
     // (e.g. Qt says "Esc", X11 wants "Escape"). Translate the common ones.
@@ -586,6 +625,7 @@ private slots:
 
 #ifdef _WIN32
         // Windows: GetAsyncKeyState
+        if (activation_key_ == 0) return;  // unmapped key: nothing to poll
         bool is_pressed = (GetAsyncKeyState(activation_key_) & 0x8000) != 0;
 
         if (is_pressed && !prev_key_state_) {
@@ -740,7 +780,9 @@ protected:
                 hotkey_listener_->start();
             }
 #else
-            activation_key_ = event->key();
+            activation_key_ = event->nativeVirtualKey() != 0
+                                  ? static_cast<int>(event->nativeVirtualKey())
+                                  : qt_key_to_vk(event->key());
 #endif
             return;
         }
