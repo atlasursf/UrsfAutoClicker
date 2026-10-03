@@ -1,2 +1,6 @@
 <RCC>
+  <qresource prefix="/">
+    <file alias="icons/on.png">icons/on.png</file>
+    <file alias="icons/off.png">icons/off.png</file>
+  </qresource>
 </RCC>

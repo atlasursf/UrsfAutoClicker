@@ -258,14 +258,19 @@ private:
     void setup_tray_icon() {
         tray_icon_ = new QSystemTrayIcon(this);
 
-        // Load icons — fallback to colored squares if files don't exist
-        QPixmap on_pixmap(32, 32);
-        on_pixmap.fill(Qt::green);
-        QPixmap off_pixmap(32, 32);
-        off_pixmap.fill(Qt::red);
+        // Custom logos, bundled via resources.qrc (icons/on.png, icons/off.png).
+        icon_on_ = QIcon(":/icons/on.png");
+        icon_off_ = QIcon(":/icons/off.png");
 
-        icon_on_ = QIcon(on_pixmap);
-        icon_off_ = QIcon(off_pixmap);
+        // Fallback to colored squares if the custom icons weren't bundled.
+        if (icon_on_.isNull() || icon_off_.isNull()) {
+            QPixmap on_pixmap(32, 32);
+            on_pixmap.fill(Qt::green);
+            QPixmap off_pixmap(32, 32);
+            off_pixmap.fill(Qt::red);
+            icon_on_ = QIcon(on_pixmap);
+            icon_off_ = QIcon(off_pixmap);
+        }
 
         tray_icon_->setIcon(icon_off_);
 
