@@ -26,6 +26,7 @@
 #endif
 
 #include "clicker_engine.h"
+#include "app_filter.h"
 
 #include <QApplication>
 #include <QMainWindow>
@@ -59,6 +60,8 @@
 #include <QDialog>
 #include <QScrollArea>
 #include <QMap>
+#include <QSet>
+#include <QAbstractItemView>
 
 // =========================================================================
 // Main Application Window
@@ -437,6 +440,7 @@ private:
         }
 
         selected_apps_ = obj.value("selected_apps").toArray();
+        update_app_status_label();
 
         update_idle_status();
     }
@@ -444,6 +448,33 @@ private:
     // ------------------------------------------------------------------
     // Hold / Toggle mode
     // ------------------------------------------------------------------
+
+    void update_app_status_label() {
+        if (selected_apps_.isEmpty()) {
+            app_status_label_->setText("Applications: All");
+        } else {
+            app_status_label_->setText(QString("Applications: %1 selected").arg(selected_apps_.size()));
+        }
+    }
+
+    // Gate for the global hotkey: with no apps chosen, everything is
+    // allowed (matches the "Applications: All" default). Otherwise the
+    // hotkey only fires while one of the chosen apps is focused. If the
+    // platform can't tell what's focused (macOS in this build), we don't
+    // block -- better a filter with no effect than one that silently
+    // disables the hotkey everywhere.
+    bool is_app_allowed() const {
+        if (selected_apps_.isEmpty()) return true;
+
+        const std::string active = active_app_identifier();
+        if (active.empty()) return true;
+
+        const QString active_id = QString::fromStdString(active);
+        for (const QJsonValue& v : selected_apps_) {
+            if (v.toString() == active_id) return true;
+        }
+        return false;
+    }
 
     // "Ready — Hold F6" in Hold mode, "Stopped — Press F6" in Toggle mode.
     void update_idle_status() {
@@ -579,8 +610,75 @@ private slots:
     }
 
     void on_choose_apps() {
-        // TODO: Show dialog to choose applications
-        QMessageBox::information(this, "Apps Filter", "App filtering not yet implemented in this demo");
+        QDialog dialog(this);
+        dialog.setWindowTitle("Choose Applications");
+        dialog.resize(380, 420);
+
+        QVBoxLayout* layout = new QVBoxLayout(&dialog);
+
+        QLabel* hint = new QLabel(
+            "When one or more apps are checked, the activation hotkey only "
+            "works while one of them is the focused window. Leave none "
+            "checked to allow all applications.", &dialog);
+        hint->setWordWrap(true);
+        layout->addWidget(hint);
+
+        QListWidget* list = new QListWidget(&dialog);
+        list->setSelectionMode(QAbstractItemView::NoSelection);
+        layout->addWidget(list);
+
+        QSet<QString> selected_ids;
+        for (const QJsonValue& v : selected_apps_) selected_ids.insert(v.toString());
+
+        const std::vector<AppInfo> apps = list_running_apps();
+        for (const AppInfo& app : apps) {
+            const QString id = QString::fromStdString(app.id);
+            QListWidgetItem* item = new QListWidgetItem(
+                QString::fromStdString(app.display_name) + "  (" + id + ")");
+            item->setData(Qt::UserRole, id);
+            item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+            item->setCheckState(selected_ids.contains(id) ? Qt::Checked : Qt::Unchecked);
+            list->addItem(item);
+        }
+
+        if (apps.empty()) {
+            QListWidgetItem* item = new QListWidgetItem(
+                "No windows detected (unsupported platform/session, or nothing open).");
+            item->setFlags(Qt::NoItemFlags);
+            list->addItem(item);
+        }
+
+        QHBoxLayout* button_layout = new QHBoxLayout();
+        QPushButton* clear_button = new QPushButton("Clear (Allow All)", &dialog);
+        QPushButton* cancel_button = new QPushButton("Cancel", &dialog);
+        QPushButton* ok_button = new QPushButton("OK", &dialog);
+        button_layout->addWidget(clear_button);
+        button_layout->addStretch();
+        button_layout->addWidget(cancel_button);
+        button_layout->addWidget(ok_button);
+        layout->addLayout(button_layout);
+
+        connect(clear_button, &QPushButton::clicked, &dialog, [list]() {
+            for (int i = 0; i < list->count(); ++i) {
+                if (list->item(i)->flags() & Qt::ItemIsUserCheckable) {
+                    list->item(i)->setCheckState(Qt::Unchecked);
+                }
+            }
+        });
+        connect(ok_button, &QPushButton::clicked, &dialog, &QDialog::accept);
+        connect(cancel_button, &QPushButton::clicked, &dialog, &QDialog::reject);
+
+        if (dialog.exec() != QDialog::Accepted) return;
+
+        QJsonArray new_selection;
+        for (int i = 0; i < list->count(); ++i) {
+            QListWidgetItem* item = list->item(i);
+            if ((item->flags() & Qt::ItemIsUserCheckable) && item->checkState() == Qt::Checked) {
+                new_selection.append(item->data(Qt::UserRole).toString());
+            }
+        }
+        selected_apps_ = new_selection;
+        update_app_status_label();
     }
 
     void toggle_clicker() {
@@ -594,6 +692,8 @@ private slots:
     // Toggle mode: each press flips the clicker.
     // Hold mode:   clicking only while the key is held down.
     void on_hotkey_pressed() {
+        if (!is_app_allowed()) return;  // focused app isn't in the chosen set
+
         if (hold_radio_->isChecked()) {
             if (!engine_.is_enabled()) start_clicker();
         } else {
