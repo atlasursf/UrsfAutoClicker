@@ -20,6 +20,7 @@ add_executable(autoclicker
     frontend.cpp
     clicker_engine.cpp
     clicker_engine.h
+    dock.h
     app_filter.cpp
     app_filter.h
     resources.qrc
