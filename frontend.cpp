@@ -4,7 +4,8 @@
  * Single-process build: the click engine (clicker_engine.h/.cpp) runs
  * in-process on its own std::thread. No TCP loopback, no child process.
  *
- * Cross-platform UI with system tray icon.
+ * Cross-platform UI with system tray icon and a left-side Dock
+ * (sidebar navigation, see dock.h).
  *
  * Build:
  *   mkdir build && cd build
@@ -30,6 +31,7 @@
 
 #include "clicker_engine.h"
 #include "app_filter.h"
+#include "dock.h"
 
 #include <QApplication>
 #include <QMainWindow>
@@ -65,6 +67,7 @@
 #include <QMap>
 #include <QSet>
 #include <QAbstractItemView>
+#include <QStackedWidget>
 
 // =========================================================================
 // Main Application Window
@@ -81,7 +84,7 @@ public:
         setWindowTitle("URSF AutoClicker");
         setWindowIcon(QIcon(":/icons/off.png"));
 
-        resize(520, 550);
+        resize(640, 550);
 
         // Setup UI
         setup_ui();
@@ -124,8 +127,22 @@ public:
 
 private:
     void setup_ui() {
+        // ============ Root: Dock (left) + pages (right) ============
+        QWidget* root = new QWidget(this);
+        setCentralWidget(root);
+
+        QHBoxLayout* root_layout = new QHBoxLayout(root);
+        root_layout->setContentsMargins(0, 0, 0, 0);
+        root_layout->setSpacing(0);
+
+        dock_ = new Dock(this);
+        stack_ = new QStackedWidget(this);
+        root_layout->addWidget(dock_);
+        root_layout->addWidget(stack_, 1);
+
+        // Page 0: Clicker
         QWidget* central = new QWidget(this);
-        setCentralWidget(central);
+        stack_->addWidget(central);
 
         QVBoxLayout* main_layout = new QVBoxLayout(central);
 
@@ -254,7 +271,7 @@ private:
         limit_group->setLayout(limit_layout);
         main_layout->addWidget(limit_group);
 
-        // ============ Tray Icon Group ============
+        // ============ Tray Icon Group (lives on the Settings page) ============
         QGroupBox* icon_group = new QGroupBox("Tray Icon", this);
         QHBoxLayout* icon_layout = new QHBoxLayout();
 
@@ -270,7 +287,6 @@ private:
         });
 
         icon_group->setLayout(icon_layout);
-        main_layout->addWidget(icon_group);
 
         // ============ Status Label ============
         main_layout->addStretch();
@@ -279,6 +295,30 @@ private:
         main_layout->addWidget(status_label_);
 
         central->setLayout(main_layout);
+
+        // ============ Page 1: Settings ============
+        QWidget* settings_page = new QWidget(this);
+        QVBoxLayout* settings_layout = new QVBoxLayout(settings_page);
+        settings_layout->addWidget(icon_group);
+        settings_layout->addStretch();
+        stack_->addWidget(settings_page);
+
+        // ============ Dock buttons ============
+        dock_->addButton("🖱", "Clicker", "Auto Clicker", [this]() {
+            stack_->setCurrentIndex(0);
+        });
+        dock_->addButton("⚙", "Settings", "Settings", [this]() {
+            stack_->setCurrentIndex(1);
+        });
+        dock_->addStretch();
+        dock_->addButton("⏻", "Exit", "Exit", [this]() {
+            auto result = QMessageBox::question(
+                this, "Exit", "Are you sure you want to exit the application?");
+            if (result == QMessageBox::Yes) {
+                qApp->quit();
+            }
+        }, false);  // sticky=false: Exit never stays highlighted
+        dock_->setActive(0);
     }
 
     // Loads the "flat"/"logo1"/"logo2" icon pairs once. apply_icon_style()
@@ -803,6 +843,10 @@ private:
     ClickerEngine engine_;
     QTimer* sync_timer_;
     bool ui_thinks_clicking_;
+
+    // Dock navigation
+    Dock* dock_;
+    QStackedWidget* stack_;
 
     QSystemTrayIcon* tray_icon_;
     QComboBox* icon_style_combo_;
